@@ -5,5 +5,4 @@ Created on 3/10/2014
 '''
 
 if __name__ == '__main__':
-    print "I love python!"
-    
+    print "just for fun!"
