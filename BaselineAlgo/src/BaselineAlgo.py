@@ -1,12 +1,14 @@
 #-*- coding: UTF-8 -*-
 '''
 Created on 3/10/2014
-
+       KSP: https://github.com/Pent00/YenKSP
 @author: zbdou
 '''
 import networkx as nx
 from collections import deque
 import matplotlib.pyplot as plt
+
+from YenKSP import *
 
 def build_virtual_network():
     """
