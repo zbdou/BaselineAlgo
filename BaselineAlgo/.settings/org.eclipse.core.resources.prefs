@@ -1,2 +1,6 @@
 eclipse.preferences.version=1
 encoding//src/BaselineAlgo.py=UTF-8
+encoding//src/YenKSP/__init__.py=utf-8
+encoding//src/YenKSP/algorithms.py=utf-8
+encoding//src/YenKSP/graph.py=utf-8
+encoding//src/YenKSP/graphviz.py=utf-8

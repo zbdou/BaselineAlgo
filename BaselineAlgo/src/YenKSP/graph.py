@@ -35,7 +35,7 @@ from graphviz import Graphviz
 # graph can also be randomly generated, or manually configured.
 class DiGraph:
     ## The location that the graph data is stored as json objects.
-    _directory_data = "data/json/"
+    _directory_data = "./YenKSP/data/json/"
     
     ## The Graphviz object that will be used to display the graph.
     _painter = None

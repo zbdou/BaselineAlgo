@@ -77,14 +77,17 @@ def build_substrate_network():
     """
     return g
 
-class BaseLineAlgo:
+class BaselineAlgo:
     """Virtual Network Mapping, baseline algorithm"""
-    def __init__(self, gv, gs):
+    def __init__(self, gv, gs, all_solutions = True, verbose = True):
         self.gv = gv
         self.gs = gs
+        self.all_solutions = all_solutions
+        self.verbose = verbose
+        self.solution_found = False
         assert self.gv, self.gs
         
-    def run(self, all_solutions = True,  verbose_output = True):
+    def run(self):
         """
         if all_solutions == False, then return if find the first solution
         if verbose_output == True, then output 1) the total number of iterations, 2) output the solution.
@@ -96,6 +99,7 @@ class BaseLineAlgo:
         # find the total number of iterations
         total_iterations = reduce(lambda x, y: x+y, map(lambda x: len(self.gv.node[x]['candidates']), virtual_nodes))
         print "The total number of iterations is: {total_iterations}".format(total_iterations=total_iterations)
+        print "Find all solutions: {0}, verbose output: {1}".format(self.all_solutions, self.verbose)
         
         self._run()
         
@@ -103,9 +107,39 @@ class BaseLineAlgo:
         '''recursive function'''
         # 0. not_done is empty
         if not self.gv.graph['not_done']:
-            # print self.gs.nodes(data=True)
+            self.solution_found = True
             print self.gv.nodes(data=True)
+
+            # FIXME: how to define the cost?            
+            # build the DiGraph
+            digraph = graph.DiGraph()
+            for ns in self.gs.nodes():
+                digraph.add_node(ns)
+                for neighbor in nx.all_neighbors(self.gs, ns):
+                    # add edges
+                    digraph.add_edge(ns, neighbor, 1.0/self.gs[ns][neighbor]['bw'])
+                    digraph.add_edge(neighbor, ns, 1.0/self.gs[neighbor][ns]['bw'])
+                    
+            # digraph.save()
+            # digraph.export()
+            
+            # K-shortest path algo.
+            # 1. for all ev in Ev
+            for src, dst in self.gv.edges():
+                ns_src, ns_dst = self.gv.node[src]['ns'], self.gv.node[dst]['ns']
+                paint = digraph.painter()
+                paint.set_source_sink(str(ns_src), str(ns_dst))
+                digraph.set_name("{0}_{1}".format(ns_src, ns_dst))
+                digraph.export(False, paint)
+                
+                items = algorithms.ksp_yen(digraph, src, dst, 3)
+                for path in items:
+                    #print path
+                    print "Cost:{0}\t{1}".format(path['cost'], "->".join(str(i) for i in (path['path'])))
+            
+            
             return
+        
         # 1. get the first nv that is in not_done
         nv = self.gv.graph['not_done'].pop(0)
         
@@ -135,6 +169,10 @@ class BaseLineAlgo:
             # step 6. 
             self._run()
             
+            # check if we have found one solution and do not expect all solutions.
+            if self.solution_found and not self.all_solutions:
+                self.gv.graph['not_done'].insert(0, nv);                             
+                return
             # step 7. restore the resource allocation database
             self.gs.node[ns]['cpu'] += nv_cpu
             self.gv.node[nv]['ns'] = None
@@ -142,11 +180,17 @@ class BaseLineAlgo:
         self.gv.graph['not_done'].insert(0, nv);                             
         return
 
-if __name__ == '__main__':
+def main():
     Gv = build_virtual_network()    
     Gs = build_substrate_network()
     
-    BaseLineAlgo(Gv, Gs).run()
+    BaselineAlgo(Gv, Gs, all_solutions = False).run()
+    
     print Gv.graph
+    
+        
+if __name__ == '__main__':
+    main()
+
     
 

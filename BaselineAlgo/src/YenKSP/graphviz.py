@@ -33,11 +33,11 @@ import codecs
 #
 class Graphviz:
     ## The location that the graph data is stored as dot markups.
-    _directory_data = "data/dot/"    
+    _directory_data = "./YenKSP/data/dot/"    
     ## The location that the graph data is stored as images.
-    _directory_images = "images/"    
+    _directory_images = "./YenKSP/images/"    
     ## The location of the templates for the dot markup.
-    _directory_templates = "data/templates/"
+    _directory_templates = "./YenKSP/data/templates/"
     ## The name of the template for the dot markup.
     _template_dot = "template.dot"
     
@@ -286,7 +286,7 @@ class Graphviz:
             self._frame_num += 1
         
         self.create_dot(name)
-        self.create_image(name)
+        # self.create_image(name)
         
         return
     
