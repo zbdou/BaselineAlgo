@@ -286,7 +286,7 @@ class Graphviz:
             self._frame_num += 1
         
         self.create_dot(name)
-        # self.create_image(name)
+        self.create_image(name)
         
         return
     

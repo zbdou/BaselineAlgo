@@ -8,7 +8,15 @@ import networkx as nx
 from collections import deque
 import matplotlib.pyplot as plt
 
-from YenKSP import *
+from YenKSP import graph, algorithms
+
+
+# 1. make sure the plot is ok.
+# 2. for link bandwidth, use all simple paths algo.
+#     2.1 split path ok
+#     2.2 no split path
+# 3. for link delay, use networkx shortest path algo.
+# 4. 如果求解失败，则要回退，重新转到 节点映射 阶段
 
 def build_virtual_network():
     """
@@ -37,12 +45,8 @@ def build_virtual_network():
         g.node[i]['ns'] = None
         
     # dump topology
-    """
-    print "------------------------------------------------"
-    print g.graph
-    print g.nodes(data = True)
-    print g.edges(data = True)
-    """
+    nxGraph2KSPDiGraph(g, "virtual").generate()
+    
     return g
 
 def build_substrate_network():
@@ -75,7 +79,31 @@ def build_substrate_network():
     print g.nodes(data = True)
     print g.edges(data = True)
     """
+    nxGraph2KSPDiGraph(g, "substrate").generate()
+    
     return g
+
+class nxGraph2KSPDiGraph:
+    """ a wrapper class, Convert networkx Graph to KSP-like DiGraph for PNG output."""
+    def __init__(self, nxGraph, name):
+        self.name = name
+        self.nxgraph = nxGraph
+    
+    def generate(self):
+        """
+        generate the PNG graph
+        """
+        assert self.nxgraph, self.name
+        
+        digraph = graph.DiGraph()
+        for ns in self.nxgraph.nodes():
+            digraph.add_node(ns)
+            for neighbor in nx.all_neighbors(self.nxgraph, ns):
+                # add edges
+                digraph.add_edge(ns, neighbor, self.nxgraph[ns][neighbor]['bw'])
+                digraph.add_edge(neighbor, ns, self.nxgraph[neighbor][ns]['bw'])       
+        digraph.set_name(self.name)
+        digraph.export()
 
 class BaselineAlgo:
     """Virtual Network Mapping, baseline algorithm"""
@@ -97,7 +125,7 @@ class BaselineAlgo:
         virtual_nodes = deque(self.gv.nodes())
           
         # find the total number of iterations
-        total_iterations = reduce(lambda x, y: x+y, map(lambda x: len(self.gv.node[x]['candidates']), virtual_nodes))
+        total_iterations = reduce(lambda x, y: x*y, map(lambda x: len(self.gv.node[x]['candidates']), virtual_nodes))
         print "The total number of iterations is: {total_iterations}".format(total_iterations=total_iterations)
         print "Find all solutions: {0}, verbose output: {1}".format(self.all_solutions, self.verbose)
         
@@ -132,7 +160,7 @@ class BaselineAlgo:
                 digraph.set_name("{0}_{1}".format(ns_src, ns_dst))
                 digraph.export(False, paint)
                 
-                items = algorithms.ksp_yen(digraph, src, dst, 3)
+                items = algorithms.ksp_yen(digraph, src, dst, 1)
                 for path in items:
                     #print path
                     print "Cost:{0}\t{1}".format(path['cost'], "->".join(str(i) for i in (path['path'])))
@@ -184,9 +212,9 @@ def main():
     Gv = build_virtual_network()    
     Gs = build_substrate_network()
     
-    BaselineAlgo(Gv, Gs, all_solutions = False).run()
+    # BaselineAlgo(Gv, Gs, all_solutions = True).run()
     
-    print Gv.graph
+    # print Gv.graph
     
         
 if __name__ == '__main__':

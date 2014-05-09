@@ -69,7 +69,7 @@ class DiGraph:
     def __init__(self, name=None):
         if name:
             self._name = name
-        
+        self._data = {}
         self.load()
         
         self._painter = Graphviz()
