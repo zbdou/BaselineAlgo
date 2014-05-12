@@ -23,7 +23,7 @@
 # 
 import os
 import codecs
-
+import shutil 
 
 ## @brief Generates images based on the Graph class.
 # 
@@ -298,10 +298,10 @@ class Graphviz:
     # @param self The object pointer.
     # @param name The name of the dot file to be generated.
     #
-    def create_dot(self, name):
+    def create_dot(self, name):                
         if not os.path.exists(self._directory_data):
             os.mkdir(self._directory_data)
-        
+
         fhandle = codecs.open("%s%s.dot" % (self._directory_data, name), 
                               encoding='utf-8', mode='w')
         
