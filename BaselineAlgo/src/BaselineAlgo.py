@@ -10,6 +10,8 @@ import ast
 import random
 import os
 from YenKSP import graph, graphviz
+import matplotlib.pyplot as plt
+
 
 # 2. for link bandwidth, use all simple paths algo.
 #     2.1 split path ok
@@ -25,7 +27,11 @@ def build_virtual_network():
     """
     g = nx.Graph(not_done = deque())
     g.add_nodes_from(range(1, 4))
-    g.add_edges_from([(1, 2), (2, 3), (1, 3)])
+    g.add_edge(1, 2, weight=30)
+    g.add_edge(1, 3, weight=50)
+    g.add_edge(2, 3, weight=10)
+    
+    #g.add_edges_from([(1, 2), (2, 3), (1, 3)])
     g.graph['not_done'] = g.nodes()
     
     # b(ev(i, j) )
@@ -33,78 +39,84 @@ def build_virtual_network():
     g[1][3]['bw'] = 50
     g[2][3]['bw'] = 10
     
+    
     # cpu(nv), map(nv), phy_nodes(nv)
     cpus = [20, 60, 30]
-    map_nv = [[5], [1, 4], [2, 3, 4]]
+    map_nv = [[5, 10, 15], [1, 4, 9, 18], [2, 3, 4, 5, 6, 7, 9]]
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
         g.node[i]['candidates'] = map_nv[i-1]
         g.node[i]['ns'] = None
         
     # dump topology
-    nxGraph2KSPDiGraph(g, "virtual").generate()
+    pos = nx.shell_layout(g)
+    nx.draw_networkx_nodes(g, pos)
+    nx.draw_networkx_edges(g, pos)
+    nx.draw_networkx_labels(g, pos)
+    nx.draw_networkx_edge_labels(g, pos, {(1,2):"30", (1,3):"50", (2,3):"10"}, label_pos=0.3)
     
+    plt.axis('off')
+    plt.savefig("virtual", transparent=True)
+    plt.clf()
+    #plt.show()
+        
     return g
 
 def build_substrate_network():
     """
-    build the physical network, return this physical network.
-    test topo:
-        see the visio graph.
+    build the substrate network which is of circle-like.
     """
-    MAX_NODES_NO = 26
-    g = nx.Graph();
+    MAX_NODES_NO = 50 + 1
+    NO_BASE = MAX_NODES_NO - 1
+    g = nx.Graph()
     g.add_nodes_from(range(1, MAX_NODES_NO))
     
-    total = random.randint(20, 40)
-    while True:
-        if total == 0: break
-        src = random.randint(1, MAX_NODES_NO-1)    
-        dst = random.randint(1, MAX_NODES_NO-1)
-        if src == dst or g.has_edge(src, dst): continue
-        bw = 10 * random.randint(1, 10)
-        g.add_edge(src, dst, {'bw':bw})            
-        total -= 1
-    
-    # cpu(ns), allocated(ns)
-    cpus = map(lambda x: 10 * random.randint(1, 10), xrange(1, MAX_NODES_NO))
-    print "cpus = ", cpus
+    # cpu resource, = 100, by default
+    cpus = map(lambda x: 100, xrange(1, MAX_NODES_NO))
+    #print "cpus = ", cpus
     
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
         
-    # dump topology
-    nxGraph2KSPDiGraph(g, "substrate").generate()
+    bw = 25
+    delay = 250
+    # build edge and weight (bandwidth & delay)
+    for i in xrange(1, MAX_NODES_NO):
+        # excluding the direct (pre, i), (i, next) links
+        dst_no = random.randint(0, 1)
+        pre = (i - 1 + NO_BASE - 1) % NO_BASE + 1
+        nxt = (i - 1 + NO_BASE + 1) % NO_BASE + 1
+        
+        if not g.has_edge(pre, i):
+            g.add_edge(pre, i, {'bw': bw, 'dy': delay})
+        if not g.has_edge(i, nxt):
+            g.add_edge(i, nxt, {'bw': bw, 'dy': delay})
+        
+        while dst_no > 0:
+            dst = random.randint(1, NO_BASE)
+            if not g.has_edge(i, dst):
+                g.add_edge(i, dst, {'bw': bw, 'dy': delay})
+            dst_no -= 1
+
+    pos = nx.circular_layout(g, scale=2)
     
+    nx.draw_networkx_nodes(g, pos)
+    nx.draw_networkx_edges(g, pos)
+    nx.draw_networkx_labels(g, pos)
+    
+    edge_labels = dict()
+    for u, v in g.edges():
+        edge_labels[(u,v)] = g[u][v]['bw']
+        
+    nx.draw_networkx_edge_labels(g, pos, edge_labels, label_pos=0.3)
+    
+    plt.axis('off')       
+    plt.savefig("circle", transparent=True)
+    #plt.show()    
+    plt.clf()
+
     return g
-
-class nxGraph2KSPDiGraph:
-    """ a wrapper class, Convert networkx Graph to KSP-like DiGraph for PNG output."""
-    def __init__(self, nxGraph, name):
-        self.name = name
-        self.nxgraph = nxGraph
-    
-    def build(self):
-        digraph = graph.DiGraph()
-        for ns in self.nxgraph.nodes():
-            node = "{0}({1})".format(ns, self.nxgraph.node[ns]['cpu'])
-            digraph.add_node(node)
-            for neighbor in nx.all_neighbors(self.nxgraph, ns):
-                # add edges
-                nei_node = "{0}({1})".format(neighbor, self.nxgraph.node[neighbor]['cpu'])
-                digraph.add_edge(node, nei_node, self.nxgraph[ns][neighbor]['bw'])
-                digraph.add_edge(nei_node, node, self.nxgraph[neighbor][ns]['bw']) 
-        return digraph
-    
-    def generate(self):
-        """
-        generate the PNG graph
-        """
-        assert self.nxgraph, self.name
-        digraph = self.build()
-        digraph.set_name(self.name)
-        digraph.export()
-
+        
 class BaselineAlgo:
     MAX_BW = 1e5
     """Virtual Network Mapping, baseline algorithm"""
@@ -152,7 +164,9 @@ class BaselineAlgo:
         
         # 2. get all paths from psrc to pdst of the substrate network, P
         paths_mapping = dict()
-        paths = nx.all_simple_paths(gs, psrc, pdst, None)
+        
+        # FXIME: try search the min delay paths
+        paths = nx.all_simple_paths(gs, psrc, pdst, 5)
         for path in paths:
             # calculate the path bandwidth based on the link bandwidth
             path_bw = self.MAX_BW
@@ -167,6 +181,35 @@ class BaselineAlgo:
         # 3. sorted_paths is sorted by the path's bandwidth
         return sorted_paths
     
+
+    def dump_virtual_path(self, gs, gv, src, dst, path):
+        # for each physical path
+        g = nx.Graph()         
+        nodes = list()
+        for path, bw in gv[src][dst]['allocated_path']:
+            nodes = list(set(nodes).union(set(path)))
+        
+        g.add_nodes_from(nodes)
+        pos = nx.circular_layout(g)
+        edgelabels = dict()
+        nx.draw_networkx_nodes(g, node_color='r', pos=pos)
+        colors = "bgrcmyk"
+        for index, (path, bw) in enumerate(gv[src][dst]['allocated_path']):
+            edges = zip(path[:-1], path[1:])
+            for edge in edges:
+                edgelabels[edge] = bw
+            
+            psrc, pdst = path[0], path[-1]
+            nx.draw_networkx_nodes(g, nodelist=[psrc, pdst], node_color='y', pos=pos)
+            nx.draw_networkx_edges(g, edgelist=edges, pos=pos, edge_color=colors[index % len(colors)])
+            nx.draw_networkx_edge_labels(g, pos, edgelabels, label_pos=0.3)
+        
+        nx.draw_networkx_labels(g, pos)
+        name = "solution({0})_{1}-{2}".format(self.solution_counter, src, dst)
+        plt.axis('off')
+        plt.savefig(name, transparent=True)
+        plt.clf()
+
     def _run(self):
         '''recursive function'''
         # 0. not_done is empty
@@ -189,6 +232,8 @@ class BaselineAlgo:
                 done = False
                 while not done:
                     sp = self._virtual_path_mapping(src, dst, gv, gs)
+                    #print "sp = ", len(sp)
+                    #print sp
                     if len(sp) == 0:
                         failed = True
                         break
@@ -227,19 +272,7 @@ class BaselineAlgo:
                 print "A solution found: "
                 # for each virtual path, draw a plot
                 for src, dst in gv.edges():
-                    # for each physical path
-                    no = 1
-                    for path, bw in gv[src][dst]['allocated_path']:
-                        g = graph.DiGraph()
-                        for node in path:
-                            g.add_node(node)
-                        for psrc, pdst in zip(path[:-1], path[1:]):
-                            g.add_edge(psrc, pdst, bw)
-                            g.add_edge(pdst, psrc, bw)
-                        name = "solution({0})_{1}-{2}_{3}".format(self.solution_counter, src, dst, no)
-                        g.set_name(name)
-                        g.export()
-                        no += 1
+                    self.dump_virtual_path(gs, gv, src, dst, path)
                 print '-------------------------------------------------'                        
             return
         
@@ -283,15 +316,15 @@ class BaselineAlgo:
         self.gv.graph['not_done'].insert(0, nv);                             
         return
 
-def remove_images(image_dir, dot_dir):
-    for d in [image_dir, dot_dir]:
+def remove_images(image_dir):
+    for d in [image_dir]:
         for f in os.listdir(d):
             tf = os.path.join(d, f)
-            if os.path.isfile(tf):
+            if os.path.splitext(tf)[1] == ".png" and os.path.isfile(tf):
                 os.remove(tf)
             
 def main():
-    remove_images(graphviz.Graphviz._directory_images, graphviz.Graphviz._directory_data)
+    remove_images("./")
     Gv = build_virtual_network()    
     Gs = build_substrate_network()
     BaselineAlgo(Gv, Gs, all_solutions = True, isBW_SP = True).run()
