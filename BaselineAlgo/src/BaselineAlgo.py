@@ -6,18 +6,10 @@ Created on 3/10/2014
 '''
 import networkx as nx
 from collections import deque
-import ast
 import random
 import os
-from YenKSP import graph, graphviz
 import matplotlib.pyplot as plt
-
-
-# 2. for link bandwidth, use all simple paths algo.
-#     2.1 split path ok
-#     2.2 no split path
-# 3. for link delay, use networkx shortest path algo.
-# 4. 如果求解失败，则要回退，重新转到 节点映射 阶段
+from YenKSP import algorithms, graph
 
 def build_virtual_network():
     """
@@ -27,22 +19,17 @@ def build_virtual_network():
     """
     g = nx.Graph(not_done = deque())
     g.add_nodes_from(range(1, 4))
-    g.add_edge(1, 2, weight=30)
-    g.add_edge(1, 3, weight=50)
-    g.add_edge(2, 3, weight=10)
-    
-    #g.add_edges_from([(1, 2), (2, 3), (1, 3)])
+    g.add_edges_from([(1, 2), (2, 3), (1, 3)])
     g.graph['not_done'] = g.nodes()
-    
-    # b(ev(i, j) )
-    g[1][2]['bw'] = 30
+
+    # assign edge bandwidth (link resource)
+    g[1][2]['bw'] = 90
     g[1][3]['bw'] = 50
-    g[2][3]['bw'] = 10
+    g[2][3]['bw'] = 80
     
-    
-    # cpu(nv), map(nv), phy_nodes(nv)
+    # assign node computation resource
     cpus = [20, 60, 30]
-    map_nv = [[5, 10, 15], [1, 4, 9, 18], [2, 3, 4, 5, 6, 7, 9]]
+    map_nv = [[5, 10, 15], [1, 4, 9], [2, 3, 6, 7]]
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
         g.node[i]['candidates'] = map_nv[i-1]
@@ -53,20 +40,35 @@ def build_virtual_network():
     nx.draw_networkx_nodes(g, pos)
     nx.draw_networkx_edges(g, pos)
     nx.draw_networkx_labels(g, pos)
-    nx.draw_networkx_edge_labels(g, pos, {(1,2):"30", (1,3):"50", (2,3):"10"}, label_pos=0.3)
+    
+    edge_labels = {(u,v): bw['bw'] for u,v,bw in g.edges(data=True)}
+    nx.draw_networkx_edge_labels(g, pos, edge_labels, label_pos=0.3)
     
     plt.axis('off')
     plt.savefig("virtual", transparent=True)
     plt.clf()
-    #plt.show()
         
     return g
 
-def build_substrate_network():
+def bandwidth_generator(bmin = 1, bmax = 100, times10 = True):
+    assert bmin <= bmax
+    r = random.randint(bmin, bmax)
+    if times10:
+        return r - r % 10 + 10
+    return r
+
+def delay_generator(dmin = 100, dmax = 100, times10 = True):
+    assert dmin <= dmax
+    r = random.randint(dmin, dmax)    
+    if times10:
+        return r - r % 10 + 10
+    return r
+    
+def build_substrate_network(nodes_no = 10, max_edge_degree = 1):
     """
     build the substrate network which is of circle-like.
     """
-    MAX_NODES_NO = 50 + 1
+    MAX_NODES_NO = nodes_no + 1
     NO_BASE = MAX_NODES_NO - 1
     g = nx.Graph()
     g.add_nodes_from(range(1, MAX_NODES_NO))
@@ -77,25 +79,23 @@ def build_substrate_network():
     
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
-        
-    bw = 25
-    delay = 250
+  
     # build edge and weight (bandwidth & delay)
     for i in xrange(1, MAX_NODES_NO):
         # excluding the direct (pre, i), (i, next) links
-        dst_no = random.randint(0, 1)
+        dst_no = random.randint(0, max_edge_degree)
         pre = (i - 1 + NO_BASE - 1) % NO_BASE + 1
         nxt = (i - 1 + NO_BASE + 1) % NO_BASE + 1
         
         if not g.has_edge(pre, i):
-            g.add_edge(pre, i, {'bw': bw, 'dy': delay})
+            g.add_edge(pre, i, {'bw': bandwidth_generator(), 'dy': delay_generator()})
         if not g.has_edge(i, nxt):
-            g.add_edge(i, nxt, {'bw': bw, 'dy': delay})
-        
+            g.add_edge(i, nxt, {'bw': bandwidth_generator(), 'dy': delay_generator()})
+            
         while dst_no > 0:
             dst = random.randint(1, NO_BASE)
             if not g.has_edge(i, dst):
-                g.add_edge(i, dst, {'bw': bw, 'dy': delay})
+                g.add_edge(i, dst, {'bw': bandwidth_generator(), 'dy': delay_generator()})
             dst_no -= 1
 
     pos = nx.circular_layout(g, scale=2)
@@ -104,23 +104,32 @@ def build_substrate_network():
     nx.draw_networkx_edges(g, pos)
     nx.draw_networkx_labels(g, pos)
     
-    edge_labels = dict()
-    for u, v in g.edges():
-        edge_labels[(u,v)] = g[u][v]['bw']
-        
+    edge_labels = {(u,v): bw['bw'] for u, v, bw in g.edges(data=True)}
     nx.draw_networkx_edge_labels(g, pos, edge_labels, label_pos=0.3)
     
     plt.axis('off')       
-    plt.savefig("circle", transparent=True)
-    #plt.show()    
+    plt.savefig("substrate", transparent=True, dpi=300)
     plt.clf()
 
     return g
+
+def graph2KSPGraph(g):
+    g2 = graph.DiGraph()
+    def add_edge(s, d, cost):
+        g2.add_edge(s, d, cost)
+        g2.add_edge(d, s, cost)
+        
+    map(lambda x: g2.add_node(x), g.nodes_iter())
+    map(lambda x: add_edge(x[0], x[1], x[2]['dy']), g.edges_iter(data=True))
+        
+    g2.set_name("aaa")
+    g2.export()
+    return g2
         
 class BaselineAlgo:
     MAX_BW = 1e5
     """Virtual Network Mapping, baseline algorithm"""
-    def __init__(self, gv, gs, all_solutions = True, verbose = True, isBW_SP = True):
+    def __init__(self, gv, gs, all_solutions = True, verbose = True, max_split_no = 1):
         """
         @isBW_SP 资源分配方式，按照链路带宽，是否允许split path
         """
@@ -129,8 +138,8 @@ class BaselineAlgo:
         self.all_solutions = all_solutions
         self.verbose = verbose
         self.solution_found = False
-        self.split = isBW_SP
         self.solution_counter = 0
+        self.max_split_no = max_split_no
         assert self.gv, self.gs
         
     def run(self):
@@ -156,58 +165,50 @@ class BaselineAlgo:
         @gv virtual network
         @gs substrate network
         
-        @return [path1:bandwidth1, path2:bandwidth2, ..., ],
-                in desc order
+        @return tuple (path, path bandwidth) of the shortest path.
+                else None
         """
         # 1. get the physical psrc, pdst
         psrc, pdst = gv.node[vsrc]['ns'], gv.node[vdst]['ns']
         
-        # 2. get all paths from psrc to pdst of the substrate network, P
-        paths_mapping = dict()
+        if nx.has_path(gs, psrc, pdst) == False: return None
+        path = nx.shortest_path(gs, psrc, pdst, weight="dy")
         
-        # FXIME: try search the min delay paths
-        paths = nx.all_simple_paths(gs, psrc, pdst, 5)
-        for path in paths:
-            # calculate the path bandwidth based on the link bandwidth
-            path_bw = self.MAX_BW
-            for link_src, link_dst in zip(path[:-1], path[1:]):
-                # print gs[link_src][link_dst]['bw'],
-                path_bw = min(gs[link_src][link_dst]['bw'], path_bw)
-            # store the path bw into this path
-            paths_mapping[str(path)] = path_bw
+        max_k = 3
+        gs2 = graph2KSPGraph(gs)
+        path2 = algorithms.ksp_yen(gs2, psrc, pdst, max_k)
+        print path2
         
-        sorted_paths = sorted(paths_mapping.iteritems(), key = lambda d: d[1], reverse = True)
-        # print sorted_paths
-        # 3. sorted_paths is sorted by the path's bandwidth
-        return sorted_paths
-    
+        # calculate the path bandwidth based on the link bandwidth
+        bws = map(lambda src, dst: gs[src][dst]['bw'], path[:-1], path[1:])
+        return (path, min(bws))
 
     def dump_virtual_path(self, gs, gv, src, dst, path):
         # for each physical path
-        g = nx.Graph()         
+        g = nx.MultiGraph()
+                 
         nodes = list()
-        for path, bw in gv[src][dst]['allocated_path']:
-            nodes = list(set(nodes).union(set(path)))
+        map(lambda x: nodes.extend(x[0]), gv[src][dst]['allocated_path'])
+        g.add_nodes_from(list(set(nodes)))
         
-        g.add_nodes_from(nodes)
         pos = nx.circular_layout(g)
-        edgelabels = dict()
         nx.draw_networkx_nodes(g, node_color='r', pos=pos)
         colors = "bgrcmyk"
         for index, (path, bw) in enumerate(gv[src][dst]['allocated_path']):
             edges = zip(path[:-1], path[1:])
-            for edge in edges:
-                edgelabels[edge] = bw
-            
+            edgelabels = {edge:bw for edge in edges}
             psrc, pdst = path[0], path[-1]
             nx.draw_networkx_nodes(g, nodelist=[psrc, pdst], node_color='y', pos=pos)
-            nx.draw_networkx_edges(g, edgelist=edges, pos=pos, edge_color=colors[index % len(colors)])
+            nx.draw_networkx_edges(g, edgelist=edges, pos=pos, edge_color=colors[index % len(colors)], label=str(path) + ", " + str(bw))
             nx.draw_networkx_edge_labels(g, pos, edgelabels, label_pos=0.3)
         
         nx.draw_networkx_labels(g, pos)
         name = "solution({0})_{1}-{2}".format(self.solution_counter, src, dst)
         plt.axis('off')
+        plt.legend(loc='best')
+        plt.tight_layout(0)
         plt.savefig(name, transparent=True)
+        
         plt.clf()
 
     def _run(self):
@@ -223,46 +224,39 @@ class BaselineAlgo:
             failed = False
             for src, dst in gv.edges():
                 if failed == True: break
-                # print "src, dst", src, dst
+                max_split = self.max_split_no
                 
-                # 取该虚拟路径(src, dst)对应的所有物理路径，sp
                 # get the virtual path's required bandwidth
                 vbw = gv[src][dst]['bw']                
                 gv[src][dst]['allocated_path'] = list()
                 done = False
                 while not done:
-                    sp = self._virtual_path_mapping(src, dst, gv, gs)
-                    #print "sp = ", len(sp)
-                    #print sp
-                    if len(sp) == 0:
+                    if max_split == 0:
+                        print "max_split = 0"
                         failed = True
                         break
-                    # 计算总带宽
-                    total_bw = sum(map(lambda d:d[1], sp))
-                    path, first_bw = sp[0]
                     
-                    if self.split == False and first_bw < vbw:
-                        print "no split, and the vbw > first_bw", vbw, first_bw
+                    sp = self._virtual_path_mapping(src, dst, gv, gs)
+                    if sp is None or (sp[1] < vbw and self.max_split_no == 1):
+                        print "sp is None or (no split and bw is not enough"
                         failed = True
                         break
-                    elif self.split == True and total_bw < vbw:
-                        print "split, but no enough bw, total < vbw", total_bw, vbw
-                        failed = True
-                        break
+                    
+                    (path, pbw) = sp
                     # 对该虚拟路径(src, dst)依次分配物理路径和带宽，并更新资源视图
-                    # print "vbw, first_bw", vbw, first_bw
-                    bwmin = min(vbw, first_bw)
+                    bwmin = min(vbw, pbw)
                     vbw -= bwmin
                     
-                    # gv allocated path 
-                    # gs resource update
-                    path = ast.literal_eval(path)
+                    # update gs resource view
                     gv[src][dst]['allocated_path'].append((path, bwmin))                        
                     for link_src, link_dst in zip(path[:-1], path[1:]):
                         gs[link_src][link_dst]['bw'] -= bwmin
+                        if gs[link_src][link_dst]['bw'] == 0:
+                            gs.remove_edge(link_src, link_dst)
 
-                    if vbw == 0:
-                        done = True
+                    if vbw == 0: done = True
+                    max_split -= 1
+                    
             if failed == True:
                 self.solution_found = False
             else: 
@@ -326,11 +320,8 @@ def remove_images(image_dir):
 def main():
     remove_images("./")
     Gv = build_virtual_network()    
-    Gs = build_substrate_network()
-    BaselineAlgo(Gv, Gs, all_solutions = True, isBW_SP = True).run()
+    Gs = build_substrate_network(15, 1)
+    BaselineAlgo(Gv, Gs, all_solutions = True, max_split_no = 2).run()
 
 if __name__ == '__main__':
     main()
-
-    
-
