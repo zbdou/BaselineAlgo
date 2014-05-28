@@ -6,8 +6,7 @@ Created on 3/10/2014
 '''
 import networkx as nx
 from collections import deque
-import random
-import os
+import random, os, math, string
 import matplotlib.pyplot as plt
 from YenKSP import algorithms, graph
 
@@ -29,7 +28,7 @@ def build_virtual_network():
     
     # assign node computation resource
     cpus = [20, 60, 30]
-    map_nv = [[1,3,5,7,9,11], [2,4,6,8,10,12,14], [3,6,9,12,15,18]]
+    map_nv = [[1,2], [1,3,4,5], [2,5]]
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
         g.node[i]['candidates'] = map_nv[i-1]
@@ -47,7 +46,7 @@ def build_virtual_network():
     nx.draw_networkx_edge_labels(g, pos, edge_labels, label_pos=0.3)
     
     plt.axis('off')
-    plt.savefig("virtual", transparent=True)
+    plt.savefig("virtual", transparent=True, dpi=300)
     plt.clf()
         
     return g
@@ -83,8 +82,6 @@ def build_substrate_network(nodes_no = 10, max_edge_degree = 1):
     
     for i in xrange(1, len(cpus) + 1):
         g.node[i]['cpu'] = cpus[i-1]
-  
-    
 
     # build edge and weight (bandwidth & delay)
     for i in xrange(1, MAX_NODES_NO):
@@ -150,6 +147,7 @@ class BaselineAlgo:
         self.solution_counter = 0
         self.max_split_no = max_split_no
         self.max_k = max_k
+        self.gs_snapshot = None
         assert self.gv, self.gs
         
     def run(self):
@@ -201,6 +199,9 @@ class BaselineAlgo:
         #print "path2 = ", paths    
         return paths
 
+    def get_gs_snapshot(self):
+        return self.gs_snapshot
+    
     def dump_virtual_path(self, gs, gv, src, dst, path):
         # for each physical path
         g = nx.Graph()
@@ -212,13 +213,16 @@ class BaselineAlgo:
         pos = nx.circular_layout(g)
         nx.draw_networkx_nodes(g, node_color='r', pos=pos)
         colors = "bgrcmyk"
-        for index, (path, bw) in enumerate(gv[src][dst]['allocated_path']):
+        for index, (path, bw, delay) in enumerate(gv[src][dst]['allocated_path']):
             edges = zip(path[:-1], path[1:])
             edgelabels = {edge:bw for edge in edges}
             psrc, pdst = path[0], path[-1]
             nx.draw_networkx_nodes(g, nodelist=[psrc, pdst], node_color='y', pos=pos)
-            nx.draw_networkx_edges(g, edgelist=edges, pos=pos, edge_color=colors[index % len(colors)], label=str(path) + ", " + str(bw))
+            nx.draw_networkx_edges(g, edgelist=edges, pos=pos, edge_color=colors[index % len(colors)], label=str(path) + ", " + str(bw) + ", " + str(int(delay)))
             nx.draw_networkx_edge_labels(g, pos, edgelabels, label_pos=0.3)
+            
+            
+            print "{0}->{1}->{2}, {3}, {4}".format(src, "->".join([str(x) for x in path]), dst, bw, delay)
         
         nx.draw_networkx_labels(g, pos)
         name = "solution({0})_{1}-{2}".format(self.solution_counter, src, dst)
@@ -226,7 +230,7 @@ class BaselineAlgo:
         plt.axis('off')
         plt.legend(loc='best')
         plt.tight_layout(0)
-        plt.savefig(name, transparent=True)
+        plt.savefig(name, transparent=True, dpi=300)
         plt.clf()
 
     def _run(self):
@@ -234,7 +238,7 @@ class BaselineAlgo:
         # 0. not_done is empty
         if not self.gv.graph['not_done']:
             self.solution_found = True
-            print self.gv.nodes(data=True)
+            #print self.gv.nodes(data=True)
 
             # 1. for all ev in Ev
             gs = nx.Graph(self.gs)
@@ -277,7 +281,7 @@ class BaselineAlgo:
                     vbw -= bwmin
                     
                     # update gs resource view
-                    gv[src][dst]['allocated_path'].append((path, bwmin))                        
+                    gv[src][dst]['allocated_path'].append((path, bwmin, delay))                        
                     for link_src, link_dst in zip(path[:-1], path[1:]):
                         if link_src == link_dst: continue
                         gs[link_src][link_dst]['bw'] -= bwmin
@@ -291,13 +295,14 @@ class BaselineAlgo:
                 self.solution_found = False
             else: 
                 # a solution found, output the result
+                self.gs_snapshot = nx.Graph(gs)
                 self.solution_counter += 1
-                print '-------------------------------------------------'
-                print "A solution found: "
+                #print '-------------------------------------------------'
+                #print "A solution found: "
                 # for each virtual path, draw a plot
                 for src, dst in gv.edges():
                     self.dump_virtual_path(gs, gv, src, dst, path)
-                print '-------------------------------------------------'                        
+                #print '-------------------------------------------------'                        
             return
         
         # 1. get the first nv that is in not_done
@@ -346,12 +351,194 @@ def remove_images(image_dir):
             tf = os.path.join(d, f)
             if os.path.splitext(tf)[1] == ".png" and os.path.isfile(tf):
                 os.remove(tf)
+
+def build_v_s_from_file(fname):
+    """
+    build the virtual network and substrate network from the file @fname
+    return tuple (gv, gs)
+    """
+    
+    # 1. build substrate network
+    C = 3e5 # light speed, in km
+    R = 42164.169637
+    gs = nx.Graph()
+    
+    sats = dict()
+    with open(fname) as f:
+        for line in f:
+            line = line[:-1] # skip \n
+            infos = string.split(line, ",")
+            (satname, loc, cpu) = int(infos[0][1:]), infos[1], infos[2]
+            sats[satname] = (satname, float(loc), int(cpu))
+            gs.add_node(satname, attr_dict = {'cpu': int(cpu)})
+    
+    total_nodes_no = gs.number_of_nodes()
+    for sat_no in sats.iterkeys():
+        pre = (sat_no - 1 + total_nodes_no - 1) % total_nodes_no + 1
+        nxt = (sat_no - 1 + total_nodes_no + 1) % total_nodes_no + 1
+        oth = ( sat_no - 1 + total_nodes_no + 17) % total_nodes_no + 1
+        
+        satlist = [pre, nxt, oth]
+        
+        def dist(n):
+            the = abs(sats[n][1] - sats[sat_no][1])
+            the = min(360 - the, the)
             
+            return 2 * R * math.sin( math.radians(the/2))
+        
+        s = map(lambda x: dist(x), satlist)
+        for sato, dis in zip(satlist, s):
+            gs.add_edge(sat_no, sato, {"dy": int(dis)*1e3/C, "bw":100, "dis": dis})
+    
+    for n in xrange(1, gs.number_of_nodes() + 1):
+        satinfos = sats[n]
+        t = ""
+        for nei in gs.neighbors(n):
+            t += ", {0}/{1}".format(nei, int(gs[n][nei]['dis']) )
+        #print "{0}, {1}, {2} {3}".format(n, satinfos[1], satinfos[2], t)
+    
+    pos = nx.circular_layout(gs, scale=2)
+    node_labels = {n: "{0}({1})".format(n, gs.node[n]['cpu']) for n in gs.nodes()}
+    nx.draw_networkx_nodes(gs, pos, node_sizes=5000)
+    nx.draw_networkx_edges(gs, pos)
+    nx.draw_networkx_labels(gs, pos, labels=node_labels, font_size=5)
+    
+    edge_labels = {(u,v): int(bw['dy']) for u, v, bw in gs.edges(data=True)}
+    nx.draw_networkx_edge_labels(gs, pos, edge_labels, label_pos=0.3, font_size=8)
+    
+    #for n in gs.nodes():
+        #print n, gs.neighbors(n)
+    
+    plt.axis('off')       
+    plt.savefig("substrate", transparent=True, dpi=300)
+    plt.clf()            
+    
+    # 2. build virtual network no.1
+    gv1 = nx.Graph(not_done = deque())
+    gv1.add_nodes_from(['CZ1', 'BJ'])
+    gv1.graph['not_done'] = gv1.nodes()
+    
+    # cpu
+    map_nv = {'CZ1':[x for x in xrange(26, 46+1)], 
+              'BJ':[x for x in (range(1, 23+1) + range(48, 50+1))],
+              'BER':[x for x in range(17, 34+1)],
+              'BRSL':[x for x in range(24, 43+1)],
+              'CPT':[x for x in range(14, 34+1)],
+              'LON':[x for x in range(18, 36+1)],
+              'MOW':[x for x in range(11, 30+1)],
+              'NYC':[x for x in range(27, 45+1)],
+              'SIN':[x for x in (range(1, 24+1) + range(49, 50+1))],
+              'TYO':[x for x in (range(1, 20+1) + range(49, 50+1))],
+              'WAS':[x for x in range(27, 46+1)]}
+    map_nv['JC3'] = map_nv['CZ1']
+    map_nv['CZ4'] = map_nv['CZ1']
+        
+    #print map_nv
+    for n in gv1.nodes():
+        gv1.node[n]['cpu'] = 20
+        gv1.node[n]['candidates'] = [x for x in map_nv[n] if gs.node[x]['cpu'] >= gv1.node[n]['cpu']]
+        gv1.node[n]['ns'] = None   
+         
+        
+    # bw, dy
+    gv1.add_edge('CZ1', 'BJ', {'bw':20})
+    
+    pos = nx.shell_layout(gv1)
+    nx.draw_networkx_nodes(gv1, pos, node_size=1500)
+    nx.draw_networkx_edges(gv1, pos)
+    
+    node_labels = {n: "{0}({1})".format(n, gv1.node[n]['cpu']) for n in gv1.nodes()}    
+    nx.draw_networkx_labels(gv1, pos,labels=node_labels)
+    
+    edge_labels = {(u,v): bw['bw'] for u,v,bw in gv1.edges(data=True)}
+    nx.draw_networkx_edge_labels(gv1, pos, edge_labels, label_pos=0.3)
+    
+    plt.axis('off')
+    plt.savefig("virtual1", transparent=True, dpi=300)
+    plt.clf()   
+        
+    # 3. build virtual network no.2
+    gv2 = nx.Graph(not_done = deque())
+    gv2.add_nodes_from(['JC3','CZ4', 'BJ'])
+    gv2.graph['not_done'] = gv2.nodes()
+    
+    # cpu
+    for n in gv2.nodes():
+        gv2.node[n]['cpu'] = 20
+        gv2.node[n]['candidates'] =  [x for x in map_nv[n] if gs.node[x]['cpu'] >= gv2.node[n]['cpu']]
+        gv2.node[n]['ns'] = None 
+        
+    # bw, dy
+    gv2.add_edge('JC3', 'BJ', {'bw':20})
+    gv2.add_edge('CZ4', 'BJ', {'bw':20})    
+
+    pos = nx.shell_layout(gv2)
+    nx.draw_networkx_nodes(gv2, pos, node_size=1500)
+    nx.draw_networkx_edges(gv2, pos)
+    
+    node_labels = {n: "{0}({1})".format(n, gv2.node[n]['cpu']) for n in gv2.nodes()}    
+    nx.draw_networkx_labels(gv2, pos,labels=node_labels)
+    
+    edge_labels = {(u,v): bw['bw'] for u,v,bw in gv2.edges(data=True)}
+    nx.draw_networkx_edge_labels(gv2, pos, edge_labels, label_pos=0.3)
+    
+    plt.axis('off')
+    plt.savefig("virtual2", transparent=True, dpi=300)
+    plt.clf() 
+    
+    
+    # 4. build virtual network no. 3
+    gv3 = nx.Graph(not_done = deque())
+    gv3.add_nodes_from(['BJ','BER', 'BRSL', 'CPT', 'LON', 'MOW', 'NYC', 'SIN', 'TYO', 'WAS'])
+    gv3.graph['not_done'] = gv3.nodes()   
+    
+    for n in gv3.nodes():
+        if n == 'BJ':
+            gv3.node[n]['cpu'] = 180
+        else:
+            gv3.node[n]['cpu'] = 20
+        gv3.node[n]['candidates'] =  [x for x in map_nv[n] if gs.node[x]['cpu'] >= gv3.node[n]['cpu']]
+        gv3.node[n]['ns'] = None 
+    
+    gv3.node['BJ']['cpu'] = 180    
+    
+    # bw, dy
+    gv3.add_edge('BER', 'BJ', {'bw':20})
+    gv3.add_edge('BRSL', 'BJ', {'bw':20})    
+    gv3.add_edge('CPT', 'BJ', {'bw':20})    
+    gv3.add_edge('LON', 'BJ', {'bw':20})    
+    gv3.add_edge('MOW', 'BJ', {'bw':20})    
+    gv3.add_edge('NYC', 'BJ', {'bw':20})    
+    gv3.add_edge('SIN', 'BJ', {'bw':20})    
+    gv3.add_edge('TYO', 'BJ', {'bw':20})    
+    gv3.add_edge('WAS', 'BJ', {'bw':20})        
+
+    pos = nx.shell_layout(gv3)
+    nx.draw_networkx_nodes(gv3, pos, node_size=1500)
+    nx.draw_networkx_edges(gv3, pos)
+    
+    node_labels = {n: "{0}({1})".format(n, gv3.node[n]['cpu']) for n in gv3.nodes()}    
+    nx.draw_networkx_labels(gv3, pos,labels=node_labels)
+    
+    edge_labels = {(u,v): bw['bw'] for u,v,bw in gv3.edges(data=True)}
+    nx.draw_networkx_edge_labels(gv3, pos, edge_labels, label_pos=0.3)
+    
+    plt.axis('off')
+    plt.savefig("virtual3", transparent=True, dpi=300)
+    plt.clf() 
+        
+    return (gv1, gv2, gv3, gs)
+
 def main():
     remove_images("./")
-    Gv = build_virtual_network()    
-    Gs = build_substrate_network(50, 1)
-    BaselineAlgo(Gv, Gs, all_solutions = True, max_split_no = 2, max_k = 50).run()
+    gv1, gv2, gv3, gs = build_v_s_from_file("sat.csv")
+    #Gv = build_virtual_network()    
+    #Gs = build_substrate_network(5, 2)
+    algo = BaselineAlgo(gv2, gs, all_solutions = False, max_split_no = 1, max_k = 5)
+    algo.run()
+    #print algo.get_gs_snapshot().nodes(True)
+    #print algo.get_gs_snapshot().edges(data=True)
+    BaselineAlgo(gv3, algo.get_gs_snapshot(), all_solutions = False, max_split_no = 1, max_k = 5).run()    
 
 if __name__ == '__main__':
     main()
